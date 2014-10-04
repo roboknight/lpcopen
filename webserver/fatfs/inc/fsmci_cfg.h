@@ -1,0 +1,1 @@
+../../example/inc/fsmci_cfg.h

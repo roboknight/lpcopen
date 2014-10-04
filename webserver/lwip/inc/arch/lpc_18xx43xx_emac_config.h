@@ -1,0 +1,1 @@
+../../../example/inc/lpc_18xx43xx_emac_config.h
