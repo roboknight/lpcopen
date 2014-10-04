@@ -51,7 +51,8 @@ all: $(PROJECT).dfu
 $(PROJECT).dfu: $(PROJECT).bin
 	@echo "($(PROJECT) HDR) $^ --> $@ "
 	@cp $^ $@
-	@dfu-prefix -a $@ -L
+	@dfu-suffix -a $@ -v 0x1fc9 -p 0x000c > /dev/null
+	@dfu-prefix -a $@ -L > /dev/null
 
 $(PROJECT).bin: $(PROJECT).elf
 	@echo "($(PROJECT) OBJ_CP) $^ $@"
