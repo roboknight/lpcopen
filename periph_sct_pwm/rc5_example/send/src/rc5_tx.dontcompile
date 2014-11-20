@@ -1,0 +1,151 @@
+/********************************************************************
+*
+*  LPC4357 - RC5 encoder (transmitter)
+*
+*  Use SCT_OUT0 to send modulated (36 KHz carrier) RC5 frames
+*  Reference: AN10210 and AN10722
+*  RC5 format:
+*
+*      | S | F | C |   5 sytem bits    |    6 command bits     |
+*      | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 0 | 1 | 1 | 1 | 1 |
+*
+*        +-+ +---+ +-+ +-+ +-+ +-+   +-+ +---+   +-+ +-+ +-+ +-+
+*        | | |   | | | | | | | | |   | | |   |   | | | | | | | |
+*   -----+ +-+   +-+ +-+ +-+ +-+ +---+ +-+   +---+ +-+ +-+ +-+ +----
+*
+*        | |
+*        | +--------------------------------------------------+
+*        |                                                    |
+*        +-+     +-+     +-+                  +-+     +-+
+*        | |     | |     | |      32 x        | |     | |
+*   -----+ +-----+ +-----+ +- - - - - - - - - + +-----+ +-------
+*
+*        |   CP  |
+*
+*  CP = 27.777 usec (= 36 KHz)
+*  25% dutycycle: high time = 6.944 usec
+*
+********************************************************************/
+#include "chip.h"
+
+#if 1
+#define RC5_DATA0()		   Chip_GPIO_WritePortBit(LPC_GPIO_PORT,0,4,FALSE )
+#define RC5_DATA1()		   Chip_GPIO_WritePortBit(LPC_GPIO_PORT,0,4,TRUE  )
+#else
+#define RC5_DATA0()		   LPC_SCU->SFSP[1][0] = 0x58     // input low (pull down)
+#define RC5_DATA1()		   LPC_SCU->SFSP[1][0] = 0x40     // input high (pull up)
+#endif
+
+static uint8_t  state;                                 // driver state
+static uint8_t  count;                                 // bit counter
+static uint8_t  flag;                                  // frame send ready flag
+static uint16_t frame;                                 // frame
+
+void RC5_Send(uint16_t fr)
+{
+    frame = fr << 2;                                   // MSB first, 14 bits shift left 2
+    state = 0;
+    flag  = 0;                                         // clear ready flag
+    count = 14;                                        // set bit count to 14
+
+    LPC_SCT->EVEN = (1 << 4);                          // event 4 generates interrupt
+
+    while (!flag) ;                                    // wait for ready flag
+}
+
+void SCT_IRQHandler(void)
+{
+    if (count)                                         // send next bit if required
+    {
+        if (state)
+        {
+            if (frame & 0x8000)
+            {
+                RC5_DATA1();
+            }
+            else
+            {
+                RC5_DATA0();
+            }
+            state = 0;
+            count --;
+            frame <<= 1;
+        }
+        else
+        {
+            if (frame & 0x8000)
+            {
+                RC5_DATA0();
+            }
+            else
+            {
+                RC5_DATA1();
+            }
+            state = 1;
+        }
+    }
+    else
+    {
+        RC5_DATA0();                                       // inactive carrier pulse
+        LPC_SCT->EVEN = 0;                                 // disable interrupt
+        flag = 1;                                          // signal ready
+    }
+    LPC_SCT->EVFLAG = (1 << 4);                            // clear event 4 flag
+}
+
+void RC5_Init(void)
+{
+    Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 4);
+    RC5_DATA0();                                           // SCT_IN0 low
+
+/********************************************************************
+*  SCT_L: low part configuration:
+********************************************************************/
+                                              
+    LPC_SCT->MATCH[0].L     = (SystemCoreClock/48000)-1;   // 75% of 36 KHz
+    LPC_SCT->MATCHREL[0].L  = (SystemCoreClock/48000)-1;
+    LPC_SCT->MATCH[1].L     = (SystemCoreClock/36000)-1;   // 36 KHz
+    LPC_SCT->MATCHREL[1].L  = (SystemCoreClock/36000)-1;
+
+    LPC_SCT->EVENT[0].STATE = 0x00000003;                  // event 0 happens in all states
+    LPC_SCT->EVENT[0].CTRL  = (0 << 0)  |                  // MATCHSEL [3:0]   = related to match 0
+                              (0 << 4)  |                  // HEVENT   [4]     = use L state & match
+                              (0 << 5)  |                  // OUTSEL   [5]     = select input from IOSEL
+                              (3 << 6)  |                  // IOSEL    [9:6]   = select input 3
+                              (3 << 10) |                  // IOCOND   [11:10] = high level
+                              (3 << 12) |                  // COMBMODE [13:12] = match AND IO condition
+                              (0 << 14) |                  // STATELD  [14]    = STATEV is added to state
+                              (0 << 15) |                  // STATEV   [19:15] = no state change
+                              (0 << 20) |                  // MATCHMEM [20]    = "equal" to match
+                              (0 << 21);                   // DIRECTION[22:21] = direction independent
+
+    LPC_SCT->EVENT[1].STATE = 0x00000003;                  // event 1 happens in all states
+    LPC_SCT->EVENT[1].CTRL  = (1 << 0)  |                  // MATCHSEL [3:0]   = related to match 1
+                              (1 << 12) |                  // COMBMODE [13:12] = match condition only
+                              (0 << 14) |                  // STATELD  [14]    = STATEV is added to state
+                              (0 << 15);                   // STATEV   [19:15] = no state change
+
+    LPC_SCT->OUT[0].SET     = (1 << 0);                    // IR LED high @ event 0
+    LPC_SCT->OUT[0].CLR     = (1 << 1);                    // IR LED low  @ event 1
+    LPC_SCT->LIMIT_L        = (1 << 1);                    // events 1 is used as counter limit
+
+/********************************************************************
+*  SCT_H: high part configuration:
+********************************************************************/
+
+    LPC_SCT->MATCH[0].H     = (SystemCoreClock / 1125)-1;  // 36 KHz / 32 ticks = 1125
+    LPC_SCT->MATCHREL[0].H  = (SystemCoreClock / 1125)-1;
+
+    LPC_SCT->EVENT[4].STATE = 0x00000003;                  // event 4 only happens in all states
+    LPC_SCT->EVENT[4].CTRL  = (0 << 0)  |                  // MATCHSEL [3:0]   = related to match_H 0
+                              (1 << 4)  |                  // HEVENT   [4]     = use H state & match
+                              (1 << 12) |                  // COMBMODE [13:12] = match condition only
+                              (0 << 14) |                  // STATELD  [14]    = STATEV is added to state
+                              (0 << 15);                   // STATEV   [19:15] = no state change
+
+    LPC_SCT->LIMIT_H        = (1 << 4);                    // events 4 is used as H counter limit
+
+    NVIC_EnableIRQ(SCT_IRQn);                              // enable SCT interrupt
+
+    LPC_SCT->CTRL_U &= ~((1 << 2) | (1 << 18));            // unhalt both low and high counter
+}

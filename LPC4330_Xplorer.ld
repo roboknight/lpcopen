@@ -19,6 +19,7 @@ MEMORY
 }
   /* Define a symbol for the top of each memory region */
   __top_SPIFIFlash = 0x14000000 + 0x400000;
+  __top_flash	 = 0x14000000 + 0x400000;
   __top_RamLoc128 = 0x10000000 + 0x20000;
   __top_RamLoc72 = 0x10080000 + 0x12000;
   __top_RamAHB32 = 0x20000000 + 0x8000;
