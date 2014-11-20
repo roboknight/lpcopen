@@ -3,4 +3,5 @@
 *.dfu
 *.elf
 *.a
+*log.txt
 
